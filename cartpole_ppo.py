@@ -62,3 +62,6 @@ if __name__ == "__main__":
         action, _states = model.predict(obs)
         obs, rewards, dones, info = env_vec.step(action)
         env_vec.render("human")
+
+        if dones:
+            obs = env_vec.reset()
