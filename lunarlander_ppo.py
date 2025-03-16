@@ -68,3 +68,6 @@ if __name__ == "__main__":
         action, _states = model.predict(obs)
         obs, rewards, dones, truncated, info = env.step(action)
         env.render()
+
+        if dones:
+            obs, _ = env.reset()
