@@ -33,7 +33,7 @@ def _load_configs(path):
 
 def _train(env_vec, configs):
     model = PPO("MlpPolicy", env_vec, verbose=1)
-    model.learn(total_timesteps=50e3)
+    model.learn(total_timesteps=100e3)
     model.save(configs['model'])
 
 
