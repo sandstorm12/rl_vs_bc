@@ -45,11 +45,6 @@ def _load_env():
     return env
 
 
-def _store_artifact(demonstrations, configs):
-    with open(configs['store_path'], 'wb') as f:
-        pickle.dump(demonstrations, f)
-
-
 def _collect(configs):
     if os.path.exists(configs['store_path']) and not configs['overwrite']:
         return
