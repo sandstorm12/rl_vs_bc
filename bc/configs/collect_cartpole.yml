@@ -1,0 +1,4 @@
+overwrite: False
+num_samples: 25000
+model: "../ppo/weights/cartpole_ppo"
+store_path: "./demonstrations/cartpole.pkl"

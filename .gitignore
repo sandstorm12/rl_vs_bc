@@ -1,5 +1,6 @@
 # Model weights
 weights/
+demonstrations/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
