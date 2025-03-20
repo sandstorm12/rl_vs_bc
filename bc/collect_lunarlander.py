@@ -49,8 +49,6 @@ def _store_artifact(demonstrations, configs):
 
 
 def _collect(configs):
-    import cv2
-
     if os.path.exists(configs['store_path']) and not configs['overwrite']:
         return
     
@@ -58,20 +56,32 @@ def _collect(configs):
     env = _load_env()
 
     demonstrations = []
+    episode = []
 
     obs, _ = env.reset()
-    for idx_sample in tqdm(range(configs['num_samples'])):
+    bar = tqdm(total=configs['num_samples'], desc="Processing", position=0)
+    for idx_sample in range(configs['num_samples']):
         action, _states = model.predict(obs)
         obs_new, rewards, dones, truncated, info = env.step(action)
 
-        demonstrations.append((
+        episode.append((
             obs, obs_new, action,
             rewards, dones, truncated, info))
 
-        if dones:
+        if truncated:
             obs_new, _ = env.reset()
+            episode = []
+
+        if dones:
+            demonstrations.extend(episode)
+            
+            obs_new, _ = env.reset()
+            episode = []
 
         obs = obs_new
+        bar.n = len(demonstrations)
+        bar.last_print_n = len(demonstrations)
+        bar.update(0)
         
     _store_artifact(demonstrations, configs)
 
