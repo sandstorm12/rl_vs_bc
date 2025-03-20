@@ -1,6 +1,7 @@
 import os
 import cv2
 import yaml
+import shelve
 import pickle
 import argparse
 
@@ -56,31 +57,28 @@ def _collect(configs):
     model = _load_model(configs)
     env = _load_env()
 
-    demonstrations = []
+    with shelve.open(configs['store_path']) as storage:
+        obs, _ = env.reset()
+        episode_length = 0
+        for idx_sample in tqdm(range(configs['num_samples'])):
+            action, _states = model.predict(obs)
+            obs_new, rewards, dones, truncated, info = env.step(action)
 
-    obs, _ = env.reset()
-    episode_length = 0
-    for idx_sample in tqdm(range(configs['num_samples'])):
-        action, _states = model.predict(obs)
-        obs_new, rewards, dones, truncated, info = env.step(action)
+            if configs['visualize']:
+                cv2.imshow("Action", cv2.resize(obs, (512, 512)))
+                if cv2.waitKey(1) == ord('q'):
+                    break
 
-        if configs['visualize']:
-            cv2.imshow("Action", cv2.resize(obs, (512, 512)))
-            if cv2.waitKey(1) == ord('q'):
-                break
+            storage[str(idx_sample)] = (
+                obs, obs_new, action,
+                rewards, dones, truncated, info)
 
-        demonstrations.append((
-            obs, obs_new, action,
-            rewards, dones, truncated, info))
+            if dones or episode_length == configs['max_episode_length']:
+                obs_new, _ = env.reset()
+                episode_length = 0
 
-        if dones or episode_length == configs['max_episode_length']:
-            obs_new, _ = env.reset()
-            episode_length = 0
-
-        obs = obs_new
-        episode_length += 1
-        
-    _store_artifact(demonstrations, configs)
+            obs = obs_new
+            episode_length += 1
 
 
 if __name__ == "__main__":

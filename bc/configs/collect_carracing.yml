@@ -1,6 +1,6 @@
 overwrite: True
 visualize: False
 max_episode_length: 600
-num_samples: 1000000
+num_samples: 100000
 model: "../ppo/weights/carracing_ppo"
-store_path: "./demonstrations/carracing.pkl"
+store_path: "./demonstrations/carracing.db"
