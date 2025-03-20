@@ -1,0 +1,6 @@
+overwrite: True
+visualize: True
+max_episode_length: 600
+num_samples: 100000
+model: "../ppo/weights/carracing_ppo"
+store_path: "./demonstrations/carracing.pkl"
