@@ -1,44 +1,10 @@
-import os
 import yaml
 import torch
-import pickle
 import argparse
 import numpy as np
-import  torch.nn.functional as F
 import gymnasium as gym
 
-from torch.utils.data import Dataset, DataLoader
-
-
-
-class MLP_BC(torch.nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim=256):
-        super(MLP_BC, self).__init__()
-        self.layer1 = torch.nn.Linear(input_dim, hidden_dim)
-        self.layer2 = torch.nn.Linear(hidden_dim, hidden_dim)
-        self.layer22 = torch.nn.Linear(hidden_dim, hidden_dim)
-        self.layer3 = torch.nn.Linear(hidden_dim, output_dim)
-        self.relu = torch.nn.ReLU()
-
-    def forward(self, x):
-        x = F.relu(self.layer1(x))
-        x = F.relu(self.layer2(x))
-        x = F.relu(self.layer22(x))
-        x = self.layer3(x)
-        
-        return x
-    
-
-class BCDataset(Dataset):
-    def __init__(self, observations, actions):
-        self._observations = observations
-        self._actions = actions
-
-    def __len__(self):
-        return len(self._observations)
-    
-    def __getitem__(self, idx):
-        return self._observations[idx], self._actions[idx]
+from cartpole_bc import MLP_BC
 
 
 def _get_arguments():
@@ -81,9 +47,12 @@ def _demo(configs):
     model = _load_model(configs['model'])
     env = _load_env()
 
+    mean = np.array(configs['mean'])
+    std = np.array(configs['std'])
+
     obs, _ = env.reset()
     while True:
-        obs = (obs - MEAN) / STD
+        obs = (obs - mean) / std
         obs = torch.tensor(obs, dtype=torch.float32)
 
         action = model(obs)
@@ -95,10 +64,6 @@ def _demo(configs):
 
         if dones:
             obs, _ = env.reset()
-
-
-MEAN = np.array([-6.3883489e-01, -1.9440360e-02, -1.2499564e-04, 1.2973925e-03])
-STD = np.array([0.5521336, 0.4348506, 0.05661277, 0.30561897])
 
 if __name__ == '__main__':
     args = _get_arguments()

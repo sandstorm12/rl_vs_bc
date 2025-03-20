@@ -1,13 +1,11 @@
-import os
 import yaml
 import torch
 import pickle
 import argparse
 import numpy as np
-import  torch.nn.functional as F
+import torch.nn.functional as F
 
 from torch.utils.data import Dataset, DataLoader
-
 
 
 class MLP_BC(torch.nn.Module):
@@ -72,13 +70,11 @@ def _load_demonstractions(configs):
     observations = np.asarray([item[0] for item in demonstrations])
     actions = np.asarray([item[2] for item in demonstrations])
     
-    # Compute mean and std
     obs_mean = observations.mean(axis=0)
-    obs_std = observations.std(axis=0) + 1e-8  # Avoid division by zero
+    obs_std = observations.std(axis=0) + 1e-8
 
     print(f"Mean: {obs_mean}, Std: {obs_std}")
 
-    # Normalize observations
     observations = (observations - obs_mean) / obs_std
 
     bc_dataset = BCDataset(observations, actions)
@@ -95,10 +91,12 @@ def _build_model():
 def _train(configs):
     dataset = _load_demonstractions(configs)
     print(f"Dataset loaded: {dataset.__len__()}")
-    dataloader = DataLoader(dataset, batch_size=configs['batch_size'], shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=configs['batch_size'],
+                            shuffle=True)
     model = _build_model()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3,
+                                 weight_decay=1e-5)
     loss = torch.nn.CrossEntropyLoss()
 
     for epoch in range(configs['num_epochs']):
@@ -112,8 +110,6 @@ def _train(configs):
 
             pred = model(obs)
 
-            # print(pred.shape, action.shape)
-            # print(pred, action)
             loss_value = loss(pred, action)
 
             optimizer.zero_grad()
@@ -122,7 +118,7 @@ def _train(configs):
 
             loss_epoch.append(loss_value.item())
 
-            predicted_labels = torch.argmax(pred, dim=1)  # Get predicted class
+            predicted_labels = torch.argmax(pred, dim=1)
             correct += (predicted_labels == action).sum().item()
             total += action.size(0)
 

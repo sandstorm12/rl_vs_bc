@@ -2,6 +2,5 @@ overwrite: False
 num_samples: 1000
 num_epochs: 2000
 batch_size: 1024
-model: "../ppo/weights/cartpole_ppo"
 demonstrations_path: "./demonstrations/cartpole.pkl"
 model_save: "./weights/cartpole_bc"
