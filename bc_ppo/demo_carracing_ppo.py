@@ -81,12 +81,14 @@ def run_cartpole(weights_path, num_episodes=5, hidden_dim=256):
         while not done:
             # Convert state to tensor
             state_tensor = torch.FloatTensor(state).unsqueeze(0)
-            state_tensor = state_tensor.permute(0, 3, 1, 2) / 255.0
+            state_tensor = state_tensor.permute(0, 3, 1, 2).div(255.0)
             
             # Get action
             with torch.no_grad():
                 action, _ = model.act(state_tensor)
             action = action.item()
+
+            print(action)
             
             # Step environment
             next_state, reward, done, truncated, _ = env.step(action)

@@ -1,11 +1,15 @@
+import time
 import numpy as np
+import gymnasium as gym
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gymnasium as gym
+
 from tqdm import tqdm
 
 from concurrent.futures import ThreadPoolExecutor
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 
 class PPO(nn.Module):
@@ -133,109 +137,115 @@ class PPOBuffer:
         self.advantages = []
         self.returns = []
 
-def fill_buffer(buffer, ppo, env, device):
-    obs, _ = env.reset()
-        
-    for step in range(2048):
-        obs_tensor = torch.tensor(obs, dtype=torch.float32).to(device)
-        obs_tensor = obs_tensor.permute(2, 0, 1).unsqueeze(0)
-        obs_tensor = obs_tensor / 255.0
-        action, log_prob = ppo.act(obs_tensor)
-        obs_new, reward, done, truncated, info = env.step(action.item())
-        _, _, value = ppo.evaluate(obs_tensor, action)
-        buffer.store(obs_tensor, action, reward,
-                     log_prob.detach(), value.item(),
-                     done, truncated)
+def fill_buffer(buffer, ppo, envs, device):
+    if hasattr(fill_buffer, 'obs'):
+        obs = fill_buffer.obs
+    else:
+        obs = envs.reset()
+    
+    for step in range(4096 // envs.num_envs):
+        obs_tensor = torch.from_numpy(obs).float().to(device).permute(0, 3, 1, 2)
+        obs_tensor.div_(255.0),
+
+        with torch.no_grad():
+            action, log_prob = ppo.act(obs_tensor)
+            obs_new, reward, done, info = envs.step(action.cpu().numpy())
+            _, _, value = ppo.evaluate(obs_tensor, action)
+
+        for idx in range(envs.num_envs):
+            obs_tensor_env = obs_tensor[idx]
+            action_env = action[idx]
+            log_prob_env = log_prob[idx]
+            value_env = value[idx]
+            reward_env = reward[idx]
+            done_env = done[idx]
+            truncated = info[idx].get('TimeLimit.truncated', False)
+
+            buffer.store(obs_tensor_env, action_env, reward_env,
+                         log_prob_env.detach(), value_env,
+                         done_env, truncated)
+
+            if done_env or truncated:
+                obs_new[idx], _ = envs.envs[idx].reset()
+
         obs = obs_new
-        if done or truncated:
-            obs, _ = env.reset()
 
 
 def update(buffer, ppo, optimizer, progress, device):
-    # First compute advantages for all samples
+    # Compute advantages once before training
     buffer.compute_advantages(gamma=0.99, lam=0.95, device=device)
     
-    batch_size = 512  # Mini-batch size
-    num_epochs = 10  # Number of passes through the data
-    
+    batch_size = 512  
+    num_epochs = 10  
     clip_param = 0.2
-    entropy_weight = (1 - progress) * 0.001
-    total_loss = 0
-    total_surrogate_loss = 0
-    total_value_loss = 0
-    total_entropy_loss = 0
-    
+    entropy_weight = (1 - progress) * 0.01
+
+    # Get total number of samples once
+    n_samples = len(buffer.states)
+    n_batches = n_samples // batch_size
+
+    # Initialize loss trackers
+    avg_loss = 0
+    avg_surrogate_loss = 0
+    avg_value_loss = 0
+    avg_entropy_loss = 0
+
     for _ in range(num_epochs):
-        # Get total number of samples
-        n_samples = len(buffer.states)
-        # How many mini-batches we'll make
-        n_batches = n_samples // batch_size
-        
         for _ in range(n_batches):
             # Sample a minibatch
-            states, actions, old_log_probs, advantages, returns = buffer.get_minibatch(batch_size, device)
+            states, actions, old_log_probs, advantages, returns = \
+                buffer.get_minibatch(batch_size, device)
             
-            # Current policy evaluation
-            new_log_probs, entropies, values = zip(*[ppo.evaluate(s, a) for s, a in zip(states, actions)])
-            new_log_probs = torch.stack(new_log_probs)
-            entropies = torch.stack(entropies)
-            values = torch.stack(values).squeeze()
-            
+            # **Batch evaluation to avoid looping**
+            new_log_probs, entropies, values = ppo.evaluate(states, actions)
+
             # Compute policy loss
             ratios = torch.exp(new_log_probs - old_log_probs)
             clipped_ratios = torch.clamp(ratios, 1 - clip_param, 1 + clip_param)
             surrogate_loss = -torch.min(ratios * advantages, clipped_ratios * advantages).mean()
-            
+
             # Compute value loss
-            value_loss = F.mse_loss(values, returns)
-            
+            value_loss = F.mse_loss(values.squeeze(), returns)
+
             # Compute entropy loss
             entropy_loss = entropies.mean()
-            
+
             # Total loss
             loss = surrogate_loss + 0.5 * value_loss - entropy_weight * entropy_loss
-            
+
             # Perform update
             optimizer.zero_grad()
             loss.backward()
-            # Optional: clip gradients
             torch.nn.utils.clip_grad_norm_(ppo.parameters(), max_norm=0.5)
             optimizer.step()
-            
-            # Track metrics
-            total_loss += loss.item()
-            total_surrogate_loss += surrogate_loss.item()
-            total_value_loss += value_loss.item()
-            total_entropy_loss += entropy_loss.item()
-    
-    # Compute average over all mini-batch updates
+
+            # Update running averages
+            avg_loss += loss.item()
+            avg_surrogate_loss += surrogate_loss.item()
+            avg_value_loss += value_loss.item()
+            avg_entropy_loss += entropy_loss.item()
+
+    # Compute final averages
     total_updates = num_epochs * n_batches
-    avg_loss = total_loss / total_updates
-    avg_surrogate_loss = total_surrogate_loss / total_updates
-    avg_value_loss = total_value_loss / total_updates
-    avg_entropy_loss = total_entropy_loss / total_updates
-    
-    # Calculate average episode reward (from buffer episodes data)
-    rewards_total = 0.0
-    num_episodes = 0
-    
-    for episode in buffer._episodes:
-        if len(episode) < 2:
-            continue
-        episode_reward = sum(item[2] for item in episode)  # item[2] is the reward
-        rewards_total += episode_reward
-        num_episodes += 1
-    
-    avg_reward = rewards_total / max(1, num_episodes)  # Avoid division by zero
-    
+    avg_loss /= total_updates
+    avg_surrogate_loss /= total_updates
+    avg_value_loss /= total_updates
+    avg_entropy_loss /= total_updates
+
+    # **Efficient reward calculation**
+    avg_reward = sum(sum(item[2] for item in ep) for ep in buffer._episodes if len(ep) > 1) / max(1, len(buffer._episodes))
+
     return avg_loss, avg_reward
+
 
 def train(ppo, env, device):
     buffer_current = PPOBuffer()
     buffer_reserve = PPOBuffer()
     optimizer = torch.optim.Adam(ppo.parameters(), lr=1e-4)
 
+    start = time.time()
     fill_buffer(buffer_current, ppo, env, device)
+    print("First buffer filled", time.time() - start)
     
     with ThreadPoolExecutor() as executor:
         EPOCHS = 100
@@ -245,9 +255,11 @@ def train(ppo, env, device):
 
             future_update = executor.submit(update, buffer_current, ppo, optimizer, progress, device)
             future_buffer = executor.submit(fill_buffer, buffer_reserve, ppo, env, device)
-            
             loss, rewards_total = future_update.result()
             future_buffer.result()
+
+            # loss, rewards_total = update(buffer_current, ppo, optimizer, progress, device)
+            # fill_buffer(buffer_reserve, ppo, env, device)
 
             bar.set_description('Loss %.3f Rewards: %.1f' % (loss, rewards_total))
 
@@ -258,12 +270,28 @@ def train(ppo, env, device):
             torch.save(ppo.state_dict(), './weights/carracing.pth')
 
 
+def _create_env(num_envs=4):
+    def make_env():
+        return gym.make("CarRacing-v2", continuous=False, render_mode="rgb_array")
+
+    envs = DummyVecEnv(
+        [make_env
+         for _ in range(num_envs)]
+    )
+
+    return envs
+
+
 # Just for test
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = 'cpu'
+
     ppo = PPO(input_dim=96, output_dim=5, hidden_dim=256).to(device)
-    env = gym.make("CarRacing-v2", continuous=False, render_mode="rgb_array")
-    train(ppo, env, device)
-    # save model
+
+    envs = _create_env()
+    print("Num envs", envs.num_envs)
+
+    train(ppo, envs, device)
+
     torch.save(ppo.state_dict(), './weights/carracing.pth')
