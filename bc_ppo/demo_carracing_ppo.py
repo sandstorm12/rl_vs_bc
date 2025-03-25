@@ -4,11 +4,19 @@ import torch.nn as nn
 import numpy as np
 
 
+import sys
+sys.path.append("..")
+
+from bc.carracing_bc import CNN_BC
+
+
 class PPO(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim):
         super(PPO, self).__init__()
         
-        self._backbone = nn.Sequential(
+        self._policy = CNN_BC()
+
+        self._value = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),
@@ -21,15 +29,13 @@ class PPO(nn.Module):
             nn.Flatten(),
             nn.Linear(128 * (input_dim//8) * (input_dim//8), hidden_dim),
             nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
         )
-
-        self._policy = nn.Linear(hidden_dim, output_dim)
-        self._value = nn.Linear(hidden_dim, 1)
     
     def forward(self, x):
-        x = self._backbone(x)
         action_logits = self._policy(x)
         value = self._value(x)
+        
         return action_logits, value
     
     def act(self, x):
@@ -38,9 +44,6 @@ class PPO(nn.Module):
         distribution = torch.distributions.Categorical(logits=action_logits)
         action = distribution.sample()
         log_prob = distribution.log_prob(action)
-
-        action = action
-
         return action, log_prob
         
     def evaluate(self, x, action):
@@ -49,6 +52,16 @@ class PPO(nn.Module):
         log_prob = distribution.log_prob(action)
         entropy = distribution.entropy()
         return log_prob, entropy, value
+    
+    def load_policy_bc(self, path):
+        bc_model = CNN_BC()  # Initialize a CNN_BC model with the same architecture
+        bc_model.load_state_dict(torch.load(path))  # Load trained weights
+        bc_model.eval()  # Set to evaluation mode
+
+        print(bc_model.state_dict().keys())
+
+        # Copy weights from CNN_BC to PPO's policy network
+        self._policy.load_state_dict(bc_model.state_dict())
 
 
 def run_cartpole(weights_path, num_episodes=5, hidden_dim=256):

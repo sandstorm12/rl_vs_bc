@@ -12,11 +12,19 @@ from concurrent.futures import ThreadPoolExecutor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 
+import sys
+sys.path.append("..")
+
+from bc.carracing_bc import CNN_BC
+
+
 class PPO(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim):
         super(PPO, self).__init__()
         
-        self._backbone = nn.Sequential(
+        self._policy = CNN_BC()
+
+        self._value = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),
@@ -29,15 +37,13 @@ class PPO(nn.Module):
             nn.Flatten(),
             nn.Linear(128 * (input_dim//8) * (input_dim//8), hidden_dim),
             nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
         )
-
-        self._policy = nn.Linear(hidden_dim, output_dim)
-        self._value = nn.Linear(hidden_dim, 1)
     
     def forward(self, x):
-        x = self._backbone(x)
         action_logits = self._policy(x)
         value = self._value(x)
+        
         return action_logits, value
     
     def act(self, x):
@@ -54,6 +60,20 @@ class PPO(nn.Module):
         log_prob = distribution.log_prob(action)
         entropy = distribution.entropy()
         return log_prob, entropy, value
+    
+    def load_policy_bc(self, path):
+        bc_model = CNN_BC()  # Initialize a CNN_BC model with the same architecture
+        bc_model.load_state_dict(torch.load(path))  # Load trained weights
+        bc_model.eval()  # Set to evaluation mode
+
+        # Copy weights from CNN_BC to PPO's policy network
+        self._policy.load_state_dict(bc_model.state_dict())
+
+
+    def freeze_policy(self, freeze=True):
+        for param in self._policy.parameters():
+            param.requires_grad = not freeze
+
     
 class PPOBuffer:
     def __init__(self):
@@ -109,8 +129,8 @@ class PPOBuffer:
         # Calculate returns (for value function target)
         returns = advantages + values
         
-        # Normalize advantages
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # # Normalize advantages
+        # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         self.advantages = advantages
         self.returns = returns
@@ -143,7 +163,7 @@ def fill_buffer(buffer, ppo, envs, device):
     else:
         obs = envs.reset()
     
-    for step in range(4096 // envs.num_envs):
+    for step in range(512 // envs.num_envs):
         obs_tensor = torch.from_numpy(obs).float().to(device).permute(0, 3, 1, 2)
         obs_tensor.div_(255.0),
 
@@ -176,9 +196,10 @@ def update(buffer, ppo, optimizer, progress, device):
     buffer.compute_advantages(gamma=0.99, lam=0.95, device=device)
     
     batch_size = 512  
-    num_epochs = 10  
+    num_epochs = 2
     clip_param = 0.2
-    entropy_weight = (1 - progress) * 0.01
+    entropy_weight = 0
+    value_weight = .1
 
     # Get total number of samples once
     n_samples = len(buffer.states)
@@ -211,7 +232,7 @@ def update(buffer, ppo, optimizer, progress, device):
             entropy_loss = entropies.mean()
 
             # Total loss
-            loss = surrogate_loss + 0.5 * value_loss - entropy_weight * entropy_loss
+            loss = surrogate_loss + value_weight * value_loss - entropy_weight * entropy_loss
 
             # Perform update
             optimizer.zero_grad()
@@ -222,8 +243,8 @@ def update(buffer, ppo, optimizer, progress, device):
             # Update running averages
             avg_loss += loss.item()
             avg_surrogate_loss += surrogate_loss.item()
-            avg_value_loss += value_loss.item()
-            avg_entropy_loss += entropy_loss.item()
+            avg_value_loss += value_weight * value_loss.item()
+            avg_entropy_loss += entropy_weight * entropy_loss.item()
 
     # Compute final averages
     total_updates = num_epochs * n_batches
@@ -235,39 +256,46 @@ def update(buffer, ppo, optimizer, progress, device):
     # **Efficient reward calculation**
     avg_reward = sum(sum(item[2] for item in ep) for ep in buffer._episodes if len(ep) > 1) / max(1, len(buffer._episodes))
 
-    return avg_loss, avg_reward
+    return avg_loss, avg_reward, avg_surrogate_loss, avg_value_loss, avg_entropy_loss
 
 
 def train(ppo, env, device):
     buffer_current = PPOBuffer()
     buffer_reserve = PPOBuffer()
-    optimizer = torch.optim.Adam(ppo.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam([
+        {'params': ppo._policy.parameters(), 'lr': 1e-4},
+        {'params': ppo._value.parameters(), 'lr': 1e-3},
+    ])
 
     start = time.time()
     fill_buffer(buffer_current, ppo, env, device)
     print("First buffer filled", time.time() - start)
+
+    ppo.freeze_policy(True)
     
-    with ThreadPoolExecutor() as executor:
-        EPOCHS = 100
-        bar = tqdm(range(EPOCHS))
-        for epoch in bar:
-            progress = epoch / EPOCHS
+    EPOCHS = 1000
+    EPOCHS_VALUE = 50
+    bar = tqdm(range(EPOCHS))
+    for epoch in bar:
+        progress = epoch / EPOCHS
 
-            future_update = executor.submit(update, buffer_current, ppo, optimizer, progress, device)
-            future_buffer = executor.submit(fill_buffer, buffer_reserve, ppo, env, device)
-            loss, rewards_total = future_update.result()
-            future_buffer.result()
+        if epoch % EPOCHS_VALUE == EPOCHS_VALUE - 1:
+            ppo.freeze_policy(False)
+            print("Training Policy")
 
-            # loss, rewards_total = update(buffer_current, ppo, optimizer, progress, device)
-            # fill_buffer(buffer_reserve, ppo, env, device)
+        avg_loss, avg_reward, avg_surrogate_loss, \
+            avg_value_loss, avg_entropy_loss = \
+                update(buffer_current, ppo, optimizer, progress, device)
+        fill_buffer(buffer_reserve, ppo, env, device)
 
-            bar.set_description('Loss %.3f Rewards: %.1f' % (loss, rewards_total))
+        bar.set_description('Loss %.3f Rewards: %.1f s_loss %.3f v_loss %.3f e_loss %.3f' % ( \
+            avg_loss, avg_reward, avg_surrogate_loss, avg_value_loss, avg_entropy_loss))
 
-            buffer_current.clear()
-            
-            buffer_current, buffer_reserve = buffer_reserve, buffer_current
+        buffer_current.clear()
+        
+        buffer_current, buffer_reserve = buffer_reserve, buffer_current
 
-            torch.save(ppo.state_dict(), './weights/carracing.pth')
+        torch.save(ppo.state_dict(), './weights/carracing.pth')
 
 
 def _create_env(num_envs=4):
@@ -288,6 +316,7 @@ if __name__ == '__main__':
     # device = 'cpu'
 
     ppo = PPO(input_dim=96, output_dim=5, hidden_dim=256).to(device)
+    ppo.load_policy_bc('/home/hamid/Documents/indie_projects/rl_vs_bc/bc/weights/carracing_bc') 
 
     envs = _create_env()
     print("Num envs", envs.num_envs)
