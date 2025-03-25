@@ -119,6 +119,7 @@ def _train(configs):
         for batch in dataloader:
             obs, action = batch
             obs = obs.to(device)
+            obs.div_(255.0)
             action = action.to(device)
 
             pred = model(obs)

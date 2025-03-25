@@ -52,6 +52,7 @@ def _demo(configs):
         obs = torch.tensor(obs, dtype=torch.float32)
         obs = obs.permute(2, 0, 1)
         obs = obs.unsqueeze(0)
+        obs.div_(255.0)
 
         action = model(obs)
 
