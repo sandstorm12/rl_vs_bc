@@ -1,9 +1,14 @@
+import yaml
+import argparse
 import numpy as np
+import gymnasium as gym
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gymnasium as gym
+
 from tqdm import tqdm
+
 
 class PPO(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim):
@@ -55,8 +60,7 @@ class PPOBuffer:
         self._episodes[-1].append((
             state, action, reward, log_prob,
             value, done, truncated))
-        
-        # Also store in flat arrays for easier batch processing
+
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
@@ -71,15 +75,12 @@ class PPOBuffer:
         self.advantages = []
         self.returns = []
         
-        # Convert to tensors for easier processing
         rewards = torch.tensor(self.rewards, dtype=torch.float32, device=device)
         values = torch.tensor(self.values, dtype=torch.float32, device=device)
         dones = torch.tensor(self.dones, dtype=torch.float32, device=device)
         
-        # Append a value of 0 for terminal states
         next_values = torch.cat([values[1:], torch.zeros(1, device=device)])
         
-        # GAE calculation
         deltas = rewards + gamma * next_values * (1 - dones) - values
         advantages = torch.zeros_like(rewards)
         last_gae = 0
@@ -90,25 +91,28 @@ class PPOBuffer:
             last_gae = deltas[t] + gamma * lam * (1 - dones[t]) * last_gae
             advantages[t] = last_gae
         
-        # Calculate returns (for value function target)
         returns = advantages + values
         
-        # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         self.advantages = advantages
         self.returns = returns
     
     def get_minibatch(self, batch_size, device):
-        batch_indices = np.random.choice(len(self.states), batch_size, replace=False)
+        batch_indices = np.random.choice(len(self.states), batch_size,
+                                         replace=False)
         
-        batch_states = torch.stack([self.states[i] for i in batch_indices]).to(device)
-        batch_actions = torch.stack([self.actions[i] for i in batch_indices]).to(device)
-        batch_log_probs = torch.stack([self.log_probs[i] for i in batch_indices]).to(device)
+        batch_states = torch.stack([self.states[i]
+                                    for i in batch_indices]).to(device)
+        batch_actions = torch.stack([self.actions[i]
+                                     for i in batch_indices]).to(device)
+        batch_log_probs = torch.stack([self.log_probs[i]
+                                       for i in batch_indices]).to(device)
         batch_advantages = self.advantages[batch_indices].to(device)
         batch_returns = self.returns[batch_indices].to(device)
         
-        return batch_states, batch_actions, batch_log_probs, batch_advantages, batch_returns
+        return batch_states, batch_actions, batch_log_probs, \
+            batch_advantages, batch_returns
     
     def clear(self):
         self._episodes = [[]]
@@ -121,12 +125,36 @@ class PPOBuffer:
         self.advantages = []
         self.returns = []
 
-def fill_buffer(buffer, ppo, env, device):
+
+def _get_arguments():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '-c', '--config',
+        help='Path to the config file',
+        type=str,
+        required=True,
+    )
+
+    args = parser.parse_args()
+
+    return args
+
+
+def _load_configs(path):
+    with open(path, 'r') as yaml_file:
+        configs = yaml.safe_load(yaml_file)
+
+    return configs
+
+
+def fill_buffer(buffer, ppo, env, device, configs):
     obs, _ = env.reset()
-    mean = np.array([-6.3883489e-01, -1.9440360e-02, -1.2499564e-04, 1.2973925e-03])
+    mean = np.array([-6.3883489e-01, -1.9440360e-02,
+                     -1.2499564e-04, 1.2973925e-03])
     std = np.array([0.5521336, 0.4348506, 0.05661277, 0.30561897])
         
-    for step in range(2048):
+    for step in range(configs['buffer_size']):
         obs = (obs - mean) / (std + 1e-8)
         obs_tensor = torch.tensor(obs, dtype=torch.float32).to(device)
         action, log_prob = ppo.act(obs_tensor)
@@ -139,12 +167,11 @@ def fill_buffer(buffer, ppo, env, device):
         if done or truncated:
             obs, _ = env.reset()
 
-def update(buffer, ppo, optimizer, progress, device):
-    # First compute advantages for all samples
+def update(buffer, ppo, optimizer, progress, device, configs):
     buffer.compute_advantages(gamma=0.99, lam=0.95, device=device)
     
-    batch_size = 64  # Mini-batch size
-    num_epochs = 10  # Number of passes through the data
+    batch_size = configs['batch_size']
+    num_epochs = configs['epochs_inner']
     
     clip_param = 0.2
     entropy_weight = (1 - progress) * 0.01
@@ -154,89 +181,91 @@ def update(buffer, ppo, optimizer, progress, device):
     total_entropy_loss = 0
     
     for _ in range(num_epochs):
-        # Get total number of samples
         n_samples = len(buffer.states)
-        # How many mini-batches we'll make
         n_batches = n_samples // batch_size
         
         for _ in range(n_batches):
-            # Sample a minibatch
-            states, actions, old_log_probs, advantages, returns = buffer.get_minibatch(batch_size, device)
+            states, actions, old_log_probs, advantages, returns = \
+                buffer.get_minibatch(batch_size, device)
             
             # Current policy evaluation
-            new_log_probs, entropies, values = zip(*[ppo.evaluate(s, a) for s, a in zip(states, actions)])
+            new_log_probs, entropies, values = \
+                zip(*[ppo.evaluate(s, a) for s, a in zip(states, actions)])
             new_log_probs = torch.stack(new_log_probs)
             # entropies = torch.stack(entropies)
             values = torch.stack(values).squeeze()
             
-            # Compute policy loss
             ratios = torch.exp(new_log_probs - old_log_probs)
-            clipped_ratios = torch.clamp(ratios, 1 - clip_param, 1 + clip_param)
-            surrogate_loss = -torch.min(ratios * advantages, clipped_ratios * advantages).mean()
+            clipped_ratios = torch.clamp(
+                ratios, 1 - clip_param, 1 + clip_param)
+            surrogate_loss = -torch.min(
+                ratios * advantages, clipped_ratios * advantages).mean()
             
-            # Compute value loss
             value_loss = F.mse_loss(values, returns)
             
-            # Compute entropy loss
+            # # Compute entropy loss
             # entropy_loss = entropies.mean()
             
-            # Total loss
             loss = surrogate_loss + 0.5 * value_loss
             
-            # Perform update
             optimizer.zero_grad()
             loss.backward()
-            # Optional: clip gradients
             torch.nn.utils.clip_grad_norm_(ppo.parameters(), max_norm=0.5)
             optimizer.step()
             
-            # Track metrics
             total_loss += loss.item()
             total_surrogate_loss += surrogate_loss.item()
             total_value_loss += value_loss.item()
             # total_entropy_loss += entropy_loss.item()
-    
-    # Compute average over all mini-batch updates
+
     total_updates = num_epochs * n_batches
     avg_loss = total_loss / total_updates
     avg_surrogate_loss = total_surrogate_loss / total_updates
     avg_value_loss = total_value_loss / total_updates
     # avg_entropy_loss = total_entropy_loss / total_updates
     
-    # Calculate average episode reward (from buffer episodes data)
     rewards_total = 0.0
     num_episodes = 0
     
     for episode in buffer._episodes:
         if len(episode) < 2:
             continue
-        episode_reward = sum(item[2] for item in episode)  # item[2] is the reward
+        episode_reward = sum(item[2] for item in episode)
         rewards_total += episode_reward
         num_episodes += 1
     
-    avg_reward = rewards_total / max(1, num_episodes)  # Avoid division by zero
+    avg_reward = rewards_total / max(1, num_episodes)
     
     return avg_loss, avg_reward
 
-def train(ppo, env, device):
+
+def train(ppo, env, device, configs):
     buffer = PPOBuffer()
     optimizer = torch.optim.Adam(ppo.parameters(), lr=3e-4)
     
-    EPOCHS = 200
+    EPOCHS = configs['epochs']
     bar = tqdm(range(EPOCHS))
     for epoch in bar:
-        fill_buffer(buffer, ppo, env, device)
         progress = epoch / EPOCHS
-        loss, rewards_total = update(buffer, ppo, optimizer, progress, device)
+        
+        fill_buffer(buffer, ppo, env, device, configs)
+        loss, rewards_total = update(buffer, ppo, optimizer, progress, device, configs)
+        
         bar.set_description('Loss %.3f Rewards: %.1f' % (loss, rewards_total))
         buffer.clear()
+        
+        torch.save(ppo.state_dict(), configs['save_path'])
 
-# Just for test
+
 if __name__ == '__main__':
+    args = _get_arguments()
+    configs = _load_configs(args.config)
+
+    print(f"Config loaded: {configs}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = 'cpu'
+    
     ppo = PPO(4, 2, 64).to(device)
     env = gym.make("CartPole-v1")
-    train(ppo, env, device)
-    #save model
-    torch.save(ppo.state_dict(), './weights/ppo.pth')
+    
+    train(ppo, env, device, configs)
