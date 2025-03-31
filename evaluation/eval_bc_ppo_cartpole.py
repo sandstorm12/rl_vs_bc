@@ -57,7 +57,6 @@ class PPO(nn.Module):
 
         self._policy.load_state_dict(bc_model.state_dict())
 
-
     def freeze_policy(self, freeze=True):
         for param in self._policy.parameters():
             param.requires_grad = not freeze
