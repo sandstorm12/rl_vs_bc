@@ -1,3 +1,6 @@
+import sys
+sys.path.append("..")
+
 import yaml
 import argparse
 import numpy as np
@@ -9,18 +12,14 @@ import torch.nn.functional as F
 
 from tqdm import tqdm
 
+from bc.cartpole_bc import MLP_BC
+
 
 class PPO(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim):
         super(PPO, self).__init__()
         
-        self._policy = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim),
-        )
+        self._policy = MLP_BC(4, 2, 256)
         self._value = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -51,6 +50,18 @@ class PPO(nn.Module):
         entropy = distribution.entropy()
         
         return log_prob, entropy, value
+    
+    def load_policy_bc(self, path):
+        bc_model = MLP_BC(4, 2, 256)
+        bc_model.load_state_dict(torch.load(path))
+        bc_model.eval()
+
+        self._policy.load_state_dict(bc_model.state_dict())
+
+
+    def freeze_policy(self, freeze=True):
+        for param in self._policy.parameters():
+            param.requires_grad = not freeze
 
 
 class PPOBuffer:
@@ -176,7 +187,6 @@ def fill_buffer(buffer, ppo, env, device, configs):
         if done or truncated:
             obs, _ = env.reset()
 
-
 def update(buffer, ppo, optimizer, progress, device, configs):
     buffer.compute_advantages(gamma=0.99, lam=0.95, device=device)
     
@@ -253,10 +263,17 @@ def train(ppo, env, device, configs):
     buffer = PPOBuffer()
     optimizer = torch.optim.Adam(ppo.parameters(), lr=3e-4)
     
+    ppo.freeze_policy(freeze=True)
+
     EPOCHS = configs['epochs']
+    EPOCHS_VALUE = configs['epochs_value']
     bar = tqdm(range(EPOCHS))
     for epoch in bar:
         progress = epoch / EPOCHS
+
+        if epoch % EPOCHS_VALUE == EPOCHS_VALUE - 1:
+            ppo.freeze_policy(freeze=False)
+            print("Training policy")
         
         fill_buffer(buffer, ppo, env, device, configs)
         loss, rewards_total = update(buffer, ppo, optimizer, progress, device, configs)
@@ -276,6 +293,8 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     ppo = PPO(4, 2, 64).to(device)
+    ppo.load_policy_bc(configs['model'])
+
     env = gym.make("CartPole-v1")
     
     train(ppo, env, device, configs)
