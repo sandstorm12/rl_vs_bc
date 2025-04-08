@@ -1,0 +1,4 @@
+overwrite: True
+visualize: False
+num_samples: 100000
+store_path: "./demonstrations/carracing.db"
