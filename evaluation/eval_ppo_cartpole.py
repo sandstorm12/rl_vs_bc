@@ -1,11 +1,12 @@
 import os
 import yaml
+import torch
 import argparse
+import numpy as np
 
-import gymnasium as gym
+from tqdm import tqdm
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.env_util import make_vec_env
 
 
@@ -31,20 +32,10 @@ def _load_configs(path):
     return configs
 
 
-def _train(env_vec, configs):
-    model = PPO("MlpPolicy", env_vec, verbose=1)
-    model.learn(total_timesteps=100e3)
-    model.save(configs['model'])
-
-
 def _load_model(configs):
     model = PPO.load(configs['model'])
 
     return model
-
-
-def _make_env(render='rgb_array'):
-    return gym.make("LunarLander-v2", continuous=False, render_mode=render)
 
 
 if __name__ == "__main__":
@@ -53,21 +44,29 @@ if __name__ == "__main__":
 
     print(f"Config loaded: {configs}")
 
-    env_vec = DummyVecEnv([_make_env for _ in range(1)])
-    
-    do_train = not os.path.exists(configs['model'] + ".zip") or configs['overwrite']
-
-    if do_train:
-        _train(env_vec, configs)
+    env_vec = make_vec_env("CartPole-v1", n_envs=1, seed=42)
     
     model = _load_model(configs)
+    torch.manual_seed(42)
 
-    env = _make_env("human")
-    obs, _ = env.reset()
+    episodes = 0
+    rewards_all = []
+
+    bar = tqdm(range(configs['num_episodes']))
+
+    obs = env_vec.reset()
     while True:
         action, _states = model.predict(obs)
-        obs, rewards, dones, truncated, info = env.step(action)
-        env.render()
+        obs, rewards, dones, info = env_vec.step(action)
+        # env_vec.render("human")
 
-        if dones or truncated:
-            obs, _ = env.reset()
+        rewards_all.append(rewards)
+
+        if dones:
+            obs = env_vec.reset()
+            episodes += 1
+            bar.update(1)
+            if episodes == configs['num_episodes']:
+                break
+ 
+    print("Avg reward", np.sum(rewards_all) / configs['num_episodes'])

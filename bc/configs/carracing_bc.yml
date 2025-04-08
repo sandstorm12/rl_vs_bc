@@ -1,5 +1,5 @@
 num_samples: 10000
-num_epochs: 200
+num_epochs: 50
 batch_size: 256
 demonstrations_path: "./demonstrations/carracing.db"
 model_save: "./weights/carracing_bc"

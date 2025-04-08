@@ -1,0 +1,7 @@
+model: "/home/hamid/Documents/indie_projects/rl_vs_bc/bc/weights/lunarlander_bc"
+save_path: "./weights/ppo_bc_lunarlander.pth"
+epochs: 60
+epochs_value: 20
+batch_size: 512
+epochs_inner: 4
+buffer_size: 2048

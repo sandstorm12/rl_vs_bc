@@ -1,10 +1,15 @@
+import sys
+sys.path.append("..")
+
 import yaml
 import torch
 import argparse
 import numpy as np
 import gymnasium as gym
 
-from carracing_bc import CNN_BC
+from tqdm import tqdm
+from bc.cartpole_bc import MLP_BC
+from stable_baselines3.common.env_util import make_vec_env
 
 
 def _get_arguments():
@@ -30,13 +35,13 @@ def _load_configs(path):
 
 
 def _load_env():
-    env = gym.make("CarRacing-v2", continuous=False, render_mode='human')
+    env = make_vec_env("CartPole-v1", n_envs=1, seed=42)
 
     return env
 
 
 def _load_model(model_path):
-    model = CNN_BC()
+    model = MLP_BC(4, 2)
     model.load_state_dict(torch.load(model_path))
     model.eval()
 
@@ -45,29 +50,41 @@ def _load_model(model_path):
 
 def _demo(configs):
     model = _load_model(configs['model'])
+    torch.manual_seed(42)
+
     env = _load_env()
 
-    obs, _ = env.reset()
-    rewards_episode = []
+    mean = np.array(configs['mean'])
+    std = np.array(configs['std'])
+
+    episodes = 0
+    rewards_all = []
+
+    bar = tqdm(range(configs['num_episodes']))
+
+    obs = env.reset()
     while True:
+        obs = (obs - mean) / std
         obs = torch.tensor(obs, dtype=torch.float32)
-        obs = obs.permute(2, 0, 1)
-        obs = obs.unsqueeze(0)
-        obs.div_(255.0)
 
         action = model(obs)
 
         action = torch.argmax(action).item()
         
-        obs, rewards, dones, truncated, info = env.step(action)
-        rewards_episode.append(rewards)
-        env.render()
+        obs, rewards, dones, info = env.step([action])
+        # env.render('human')
 
-        if dones or truncated:
-            obs, _ = env.reset()
-            print("Rewards", np.sum(rewards_episode))
-            rewards_episode = []
-            
+        rewards_all.append(rewards)
+
+        if dones:
+            obs = env.reset()
+            episodes += 1
+            bar.update(1)
+            if episodes == configs['num_episodes']:
+                break
+
+    print("Avg reward", np.sum(rewards_all) / configs['num_episodes'])
+
 
 if __name__ == '__main__':
     args = _get_arguments()
