@@ -18,7 +18,7 @@ class PPO(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim):
         super(PPO, self).__init__()
         
-        self._policy = MLP_BC(4, 2, 256)
+        self._policy = MLP_BC(input_dim, output_dim, 256)
         self._value = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -51,15 +51,17 @@ class PPO(nn.Module):
         return log_prob, entropy, value
     
     def load_policy_bc(self, path):
-        bc_model = MLP_BC(4, 2, 256)
+        bc_model = MLP_BC(8, 4, 256)
         bc_model.load_state_dict(torch.load(path))
         bc_model.eval()
 
         self._policy.load_state_dict(bc_model.state_dict())
 
+
     def freeze_policy(self, freeze=True):
         for param in self._policy.parameters():
             param.requires_grad = not freeze
+
 
 
 def _get_arguments():
@@ -85,7 +87,7 @@ def _load_configs(path):
 
 
 def run_cartpole(weights_path, num_episodes=5, hidden_dim=64):
-    env = make_vec_env("CartPole-v1", n_envs=1, seed=42)
+    env = make_vec_env("LunarLander-v2", n_envs=1, seed=42)
     
     input_dim = env.observation_space.shape[0]
     output_dim = env.action_space.n
@@ -98,6 +100,10 @@ def run_cartpole(weights_path, num_episodes=5, hidden_dim=64):
     except Exception as e:
         print(f"Error loading weights: {e}")
         return
+    torch.manual_seed(42)
+    
+    mean = np.array(configs['mean'])
+    std = np.array(configs['std'])
     
     model.eval()
         
@@ -108,10 +114,6 @@ def run_cartpole(weights_path, num_episodes=5, hidden_dim=64):
     
     obs = env.reset()
     while True:
-        mean = np.array([-6.3883489e-01, -1.9440360e-02,
-                            -1.2499564e-04, 1.2973925e-03])
-        std = np.array([0.5521336, 0.4348506,
-                        0.05661277, 0.30561897])
         obs = (obs - mean) / std
         obs_tensor = torch.tensor(obs, dtype=torch.float32)
         
@@ -144,4 +146,5 @@ if __name__ == "__main__":
 
     print(f"Config loaded: {configs}")
 
+    configs['model'] = "/home/hamid/Documents/indie_projects/rl_vs_bc/bc_ppo/weights/ppo_bc_lunarlander_38.pth"
     run_cartpole(configs['model'], num_episodes=configs['num_episodes'], hidden_dim=64)

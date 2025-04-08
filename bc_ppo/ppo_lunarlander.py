@@ -1,25 +1,35 @@
+import sys
+sys.path.append("..")
+
+import yaml
+import argparse
 import numpy as np
+import gymnasium as gym
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gymnasium as gym
+
 from tqdm import tqdm
+
+from bc.lunarlander_bc import MLP_BC
+from stable_baselines3.common.env_util import make_vec_env
+
 
 class PPO(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim):
         super(PPO, self).__init__()
         
-        self._backbone = nn.Sequential(
+        self._policy = MLP_BC(input_dim, output_dim)
+        self._value = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
         )
-        self._policy = nn.Linear(hidden_dim, output_dim)
-        self._value = nn.Linear(hidden_dim, 1)
     
     def forward(self, x):
-        x = self._backbone(x)
         action_logits = self._policy(x)
         value = self._value(x)
         return action_logits, value
@@ -50,6 +60,11 @@ class PPOBuffer:
         self.dones = []
         self.advantages = []
         self.returns = []
+
+        self._rewards_mean = 0
+        self._rewards_std = 1
+        self._advantage_mean = 0
+        self._advantage_std = 1
     
     def store(self, state, action, reward, log_prob, value, done, truncated):
         self._episodes[-1].append((
@@ -75,6 +90,11 @@ class PPOBuffer:
         rewards = torch.tensor(self.rewards, dtype=torch.float32, device=device)
         values = torch.tensor(self.values, dtype=torch.float32, device=device)
         dones = torch.tensor(self.dones, dtype=torch.float32, device=device)
+
+        # Normalize rewards
+        self._rewards_mean = .9 * self._rewards_mean + .1 * rewards.mean()    
+        self._rewards_std = .9 * self._rewards_std + .1 * rewards.std()
+        rewards = (rewards - self._rewards_mean) / (self._rewards_std + 1e-8)
         
         # Append a value of 0 for terminal states
         next_values = torch.cat([values[1:], torch.zeros(1, device=device)])
@@ -90,11 +110,14 @@ class PPOBuffer:
             last_gae = deltas[t] + gamma * lam * (1 - dones[t]) * last_gae
             advantages[t] = last_gae
         
+        # Normalize advantages
+        self._advantage_mean = .9 * self._advantage_mean + .1 * advantages.mean()
+        self._advantage_std = .9 * self._advantage_std + .1 * advantages.std()
+        advantages = (advantages - self._advantage_mean) / (self._advantage_std + 1e-8)
+        # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
         # Calculate returns (for value function target)
         returns = advantages + values
-        
-        # Normalize advantages
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         self.advantages = advantages
         self.returns = returns
@@ -121,7 +144,30 @@ class PPOBuffer:
         self.advantages = []
         self.returns = []
 
-def fill_buffer(buffer, ppo, env, device):
+
+def _get_arguments():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '-c', '--config',
+        help='Path to the config file',
+        type=str,
+        required=True,
+    )
+
+    args = parser.parse_args()
+
+    return args
+
+
+def _load_configs(path):
+    with open(path, 'r') as yaml_file:
+        configs = yaml.safe_load(yaml_file)
+
+    return configs
+
+
+def fill_buffer(buffer, ppo, env, device, configs):
     obs, _ = env.reset()
     mean = np.array([
         0.09450758, 0.59836125, 0.02613196, -0.12162905, 
@@ -133,7 +179,7 @@ def fill_buffer(buffer, ppo, env, device):
         0.10467913, 0.12128206, 0.34161037, 0.32934433
     ])
         
-    for step in range(2048):
+    for step in range(configs['buffer_size']):
         obs = (obs - mean) / (std + 1e-8)
         obs_tensor = torch.tensor(obs, dtype=torch.float32).to(device)
         action, log_prob = ppo.act(obs_tensor)
@@ -146,15 +192,16 @@ def fill_buffer(buffer, ppo, env, device):
         if done or truncated:
             obs, _ = env.reset()
 
-def update(buffer, ppo, optimizer, progress, device):
+
+def update(buffer, ppo, optimizer, progress, device, configs):
     # First compute advantages for all samples
     buffer.compute_advantages(gamma=0.99, lam=0.95, device=device)
     
-    batch_size = 64  # Mini-batch size
-    num_epochs = 10  # Number of passes through the data
+    batch_size = configs['batch_size']
+    num_epochs = configs['epochs_inner']
     
     clip_param = 0.2
-    entropy_weight = (1 - progress) * 0.001
+    entropy_weight = 0 #(1 - progress) * 0.001
     total_loss = 0
     total_surrogate_loss = 0
     total_value_loss = 0
@@ -170,6 +217,8 @@ def update(buffer, ppo, optimizer, progress, device):
             # Sample a minibatch
             states, actions, old_log_probs, advantages, returns = buffer.get_minibatch(batch_size, device)
             
+            # print(returns)
+
             # Current policy evaluation
             new_log_probs, entropies, values = zip(*[ppo.evaluate(s, a) for s, a in zip(states, actions)])
             new_log_probs = torch.stack(new_log_probs)
@@ -225,25 +274,36 @@ def update(buffer, ppo, optimizer, progress, device):
     
     return avg_loss, avg_reward
 
-def train(ppo, env, device):
+def train(ppo, env, device, configs):
     buffer = PPOBuffer()
-    optimizer = torch.optim.Adam(ppo.parameters(), lr=3e-4)
+    optimizer = torch.optim.Adam(ppo.parameters(), lr=1e-3)
+    start_lr = 1e-3
+    end_lr = 1e-5
+    lr_lambda = lambda epoch: ((start_lr - end_lr) * (1 - epoch / configs['epochs']) + end_lr) / start_lr
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
     
-    EPOCHS = 100
+    EPOCHS = configs['epochs']
     bar = tqdm(range(EPOCHS))
     for epoch in bar:
-        fill_buffer(buffer, ppo, env, device)
+        fill_buffer(buffer, ppo, env, device, configs)
         progress = epoch / EPOCHS
-        loss, rewards_total = update(buffer, ppo, optimizer, progress, device)
+        loss, rewards_total = update(buffer, ppo, optimizer, progress, device, configs)
         bar.set_description('Loss %.3f Rewards: %.1f' % (loss, rewards_total))
         buffer.clear()
+        torch.save(ppo.state_dict(), './weights/ppo_lunarlander.pth')
+        scheduler.step()
 
-# Just for test
+
 if __name__ == '__main__':
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    args = _get_arguments()
+    configs = _load_configs(args.config)
+
+    print(f"Config loaded: {configs}")
+
     device = 'cpu'
+    
     ppo = PPO(8, 4, 64).to(device)
-    env = gym.make("LunarLander-v2")
-    train(ppo, env, device)
-    #save model
-    torch.save(ppo.state_dict(), './weights/lunarlander.pth')
+    # env = make_vec_env("LunarLander-v2", n_envs=1, seed=42)
+    env = gym.make("LunarLander-v2", continuous=False, render_mode="rgb_array")
+
+    train(ppo, env, device, configs)

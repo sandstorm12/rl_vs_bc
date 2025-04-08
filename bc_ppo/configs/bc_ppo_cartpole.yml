@@ -3,5 +3,5 @@ save_path: "./weights/ppo_bc_cartpole.pth"
 epochs: 30
 epochs_value: 10
 batch_size: 64
-epochs_inner: 10
+epochs_inner: 4
 buffer_size: 2048

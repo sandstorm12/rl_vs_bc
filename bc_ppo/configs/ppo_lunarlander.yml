@@ -1,0 +1,5 @@
+save_path: "./weights/ppo_cartpole.pth"
+epochs: 200
+batch_size: 512
+epochs_inner: 4
+buffer_size: 2048

@@ -86,6 +86,11 @@ class PPOBuffer:
         self.dones = []
         self.advantages = []
         self.returns = []
+
+        self._rewards_mean = 0
+        self._rewards_std = 1
+        self._advantage_mean = 0
+        self._advantage_std = 1
     
     def store(self, state, action, reward, log_prob, value, done, truncated):
         self._episodes[-1].append((
@@ -111,6 +116,11 @@ class PPOBuffer:
         rewards = torch.tensor(self.rewards, dtype=torch.float32, device=device)
         values = torch.tensor(self.values, dtype=torch.float32, device=device)
         dones = torch.tensor(self.dones, dtype=torch.float32, device=device)
+
+        # Normalize rewards
+        self._rewards_mean = .9 * self._rewards_mean + .1 * rewards.mean()    
+        self._rewards_std = .9 * self._rewards_std + .1 * rewards.std()
+        rewards = (rewards - self._rewards_mean) / (self._rewards_std + 1e-8)
         
         # Append a value of 0 for terminal states
         next_values = torch.cat([values[1:], torch.zeros(1, device=device)])
@@ -126,11 +136,12 @@ class PPOBuffer:
             last_gae = deltas[t] + gamma * lam * (1 - dones[t]) * last_gae
             advantages[t] = last_gae
         
-        # Calculate returns (for value function target)
-        returns = advantages + values
+        # Normalize advantages
+        self._advantage_mean = .9 * self._advantage_mean + .1 * advantages.mean()
+        self._advantage_std = .9 * self._advantage_std + .1 * advantages.std()
+        advantages = (advantages - self._advantage_mean) / (self._advantage_std + 1e-8)
         
-        # # Normalize advantages
-        # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        returns = advantages + values
         
         self.advantages = advantages
         self.returns = returns
@@ -195,8 +206,8 @@ def update(buffer, ppo, optimizer, progress, device):
     # Compute advantages once before training
     buffer.compute_advantages(gamma=0.99, lam=0.95, device=device)
     
-    batch_size = 512  
-    num_epochs = 2
+    batch_size = 64
+    num_epochs = 4
     clip_param = 0.2
     entropy_weight = 0
     value_weight = .1
@@ -263,8 +274,8 @@ def train(ppo, env, device):
     buffer_current = PPOBuffer()
     buffer_reserve = PPOBuffer()
     optimizer = torch.optim.Adam([
-        {'params': ppo._policy.parameters(), 'lr': 1e-4},
-        {'params': ppo._value.parameters(), 'lr': 1e-3},
+        {'params': ppo._policy.parameters(), 'lr': 1e-5},
+        {'params': ppo._value.parameters(), 'lr': 1e-4},
     ])
 
     start = time.time()

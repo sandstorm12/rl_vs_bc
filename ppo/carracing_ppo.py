@@ -64,12 +64,14 @@ if __name__ == "__main__":
 
     env = _make_env("human")
     obs, _ = env.reset()
+    steps = 0
     while True:
         action, _states = model.predict(obs)
         obs, rewards, dones, truncated, info = env.step(action)
         env.render()
+        steps += 1
 
-        print(rewards)
-
-        if dones:
+        if steps > 1000 or dones and truncated:
             obs, _ = env.reset()
+            steps = 0
+
