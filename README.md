@@ -22,11 +22,48 @@ Reinforcement learning (RL) algorithms often suffer from poor sample efficiency 
 
 We evaluate the methods on three OpenAI Gym environments:
 
-- `CartPole-v1`
-- `LunarLander-v2`
-- `CarRacing-v2`
+---
 
-## 🔍 Results Summary
+### 🪁 CartPole-v1
+
+#### PPO
+![CartPole PPO](gifs/cartpole_ppo.gif)
+
+#### Behavior Cloning (BC)
+![CartPole BC](gifs/cartpole_bc.gif)
+
+#### BC + PPO
+![CartPole Hybrid](gifs/cartpole_hybrid.gif)
+
+---
+
+### 🚀 LunarLander-v2
+
+#### PPO
+![LunarLander PPO](gifs/lunarlander_ppo.gif)
+
+#### Behavior Cloning (BC)
+![LunarLander BC](gifs/lunarlander_bc.gif)
+
+#### BC + PPO
+![LunarLander Hybrid](gifs/lunarlander_hybrid.gif)
+
+---
+
+### 🏎️ CarRacing-v2
+
+#### PPO
+![CarRacing PPO](gifs/carracing_ppo.gif)
+
+#### Behavior Cloning (BC)
+![CarRacing BC](gifs/carracing_bc.gif)
+
+#### BC + PPO
+![CarRacing Hybrid](gifs/carracing_hybrid.gif)
+
+---
+
+## 📈 Results Summary
 
 | Environment     | Method    | Avg Reward | Samples to Converge | Warm-up Steps |
 |----------------|-----------|------------|----------------------|----------------|
@@ -39,6 +76,8 @@ We evaluate the methods on three OpenAI Gym environments:
 | CarRacing-v2    | PPO       | ~600       | ~1,000,000           | 0              |
 |                | BC        | ~300       | 20,000 (supervised)  | N/A            |
 |                | BC + PPO  | ~650       | ~800,000             | 20,000         |
+
+---
 
 ## ⚙️ Hyperparameter Sensitivity
 
