@@ -1,2 +1,3 @@
-overwrite: False
+overwrite: True
 model: "./weights/cartpole_ppo"
+train_steps: 50000

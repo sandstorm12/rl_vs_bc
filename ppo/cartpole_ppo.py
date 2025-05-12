@@ -32,8 +32,8 @@ def _load_configs(path):
 
 
 def _train(env_vec, configs):
-    model = PPO("MlpPolicy", env_vec, verbose=1)
-    model.learn(total_timesteps=25e3)
+    model = PPO("MlpPolicy", env_vec, seed=47, verbose=1)
+    model.learn(total_timesteps=configs['train_steps'])
     model.save(configs['model'])
 
 
@@ -49,7 +49,7 @@ if __name__ == "__main__":
 
     print(f"Config loaded: {configs}")
 
-    env_vec = make_vec_env("CartPole-v1", n_envs=1)
+    env_vec = make_vec_env("CartPole-v1", n_envs=1, seed=47)
     
     do_train = not os.path.exists(configs['model'] + ".zip") or configs['overwrite']
 
