@@ -29,34 +29,32 @@ class PPO(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
-    
+
     def forward(self, x):
         action_logits = self._policy(x)
         value = self._value(x)
         
         return action_logits, value
-    
-    def act(self, x, generator=None):
+
+    def act(self, x):
         action_logits, _ = self.forward(x)
         
         distribution = torch.distributions.Categorical(logits=action_logits)
         action = distribution.sample()
-        # if generator is None:
-            
-        # else:
-        #     action = distribution.sample(generator=generator)
+
         log_prob = distribution.log_prob(action)
         
         return action, log_prob
-        
+
     def evaluate(self, x, action):
         action_logits, value = self.forward(x)
         distribution = torch.distributions.Categorical(logits=action_logits)
         log_prob = distribution.log_prob(action)
         entropy = distribution.entropy()
-        
+
         return log_prob, entropy, value
-    
+
+
 class PPOBuffer:
     def __init__(self):
         self._episodes = [[]]
@@ -73,7 +71,7 @@ class PPOBuffer:
         self._rewards_std = 1
         self._advantage_mean = 0
         self._advantage_std = 1
-    
+
     def store(self, state, action, reward, log_prob, value, done, truncated):
         self._episodes[-1].append((
             state, action, reward, log_prob,
@@ -89,7 +87,7 @@ class PPOBuffer:
         
         if done or truncated:
             self._episodes.append([])
-    
+
     def compute_advantages(self, gamma=0.99, lam=0.95, device='cpu'):
         self.advantages = []
         self.returns = []
@@ -120,7 +118,7 @@ class PPOBuffer:
         
         self.advantages = advantages
         self.returns = returns
-    
+
     def get_minibatch(self, batch_size, device):
         batch_indices = np.random.choice(len(self.states), batch_size, replace=False)
         
@@ -130,8 +128,9 @@ class PPOBuffer:
         batch_advantages = self.advantages[batch_indices].to(device)
         batch_returns = self.returns[batch_indices].to(device)
         
-        return batch_states, batch_actions, batch_log_probs, batch_advantages, batch_returns
-    
+        return batch_states, batch_actions, batch_log_probs, \
+            batch_advantages, batch_returns
+
     def clear(self):
         self._episodes = [[]]
         self.states = []
@@ -185,7 +184,7 @@ def fill_buffer(buffer, ppo, env, device, configs):
         with torch.no_grad():
             action, log_prob = ppo.act(obs_tensor, generator=torch_rng)
         
-        obs_new, reward, done, truncated, info = env.step(action.item())
+        obs_new, reward, done, truncated, _ = env.step(action.item())
 
         with torch.no_grad():
             _, _, value = ppo.evaluate(obs_tensor, action)
@@ -201,7 +200,6 @@ def fill_buffer(buffer, ppo, env, device, configs):
 
 
 def update(buffer, ppo, optimizer, progress, device, configs):
-    # First compute advantages for all samples
     buffer.compute_advantages(gamma=0.99, lam=0.95, device=device)
     
     batch_size = configs['batch_size']
@@ -216,26 +214,15 @@ def update(buffer, ppo, optimizer, progress, device, configs):
     total_entropy_loss = 0
     
     for _ in range(num_epochs):
-        # Get total number of samples
         n_samples = len(buffer.states)
-        # How many mini-batches we'll make
         n_batches = n_samples // batch_size
         
         for _ in range(n_batches):
-            # Sample a minibatch
-            states, actions, old_log_probs, advantages, returns = buffer.get_minibatch(batch_size, device)
-            
-            # print(returns)
+            states, actions, old_log_probs, advantages, returns = \
+                buffer.get_minibatch(batch_size, device)
 
-            # Current policy evaluation
-            # new_log_probs, entropies, values = zip(*[ppo.evaluate(s, a) for s, a in zip(states, actions)])
-            # states_tensor = torch.stack(states)  # shape: [batch_size, ...]
-            # actions_tensor = torch.stack(actions)
-
-            new_log_probs, entropies, values = ppo.evaluate(states, actions)
-
-            # new_log_probs = torch.stack(new_log_probs)
-            # entropies = torch.stack(entropies)
+            new_log_probs, entropies, values = \
+                ppo.evaluate(states, actions)
             values = values.squeeze()
             
             # Compute policy loss
@@ -258,7 +245,6 @@ def update(buffer, ppo, optimizer, progress, device, configs):
             # Perform update
             optimizer.zero_grad()
             loss.backward()
-            # Optional: clip gradients
             torch.nn.utils.clip_grad_norm_(ppo.parameters(), max_norm=0.5)
             optimizer.step()
             
@@ -298,7 +284,7 @@ def train(ppo, env, device, configs):
         {'params': ppo._policy.parameters(), 'lr': 1e-4},
         {'params': ppo._value.parameters(), 'lr': 1e-3}
     ])
-    
+
     step_size = configs['train_steps'] / configs['buffer_size'] // 20
     scheduler = StepLR(optimizer, step_size=step_size, gamma=0.9)
 
@@ -307,25 +293,25 @@ def train(ppo, env, device, configs):
     avg_surrogate_loss_history = []
     avg_value_loss_history = []
     avg_entropy_loss_history = []
-    
+
     total_timesteps = configs['train_steps']
     timesteps = 0
     bar = tqdm(range(total_timesteps))
     while timesteps < total_timesteps:
         progress = min(timesteps / total_timesteps, 1.0)
-        
+
         steps = fill_buffer(buffer, ppo, env, device, configs)
         timesteps += steps
         avg_loss, avg_reward, avg_surrogate_loss, \
             avg_value_loss, avg_entropy_loss = \
             update(buffer, ppo, optimizer, progress, device, configs)
-        
+
         avg_loss_history.append(avg_loss)
         avg_reward_history.append(avg_reward)
         avg_surrogate_loss_history.append(avg_surrogate_loss)
         avg_value_loss_history.append(avg_value_loss)
         avg_entropy_loss_history.append(avg_entropy_loss)
-        
+
         bar.update(steps)
         bar.set_description(
             'AL %.3f AR: %.1f ASL %.3f AVL %.3f AEL %.3f' % \
@@ -345,7 +331,7 @@ def train(ppo, env, device, configs):
     plt.plot(avg_entropy_loss_history, label='Average Entropy Loss')
     plt.legend()
     plt.show()
-        
+
     torch.save(ppo.state_dict(), configs['save_path'])
 
 
@@ -357,7 +343,7 @@ if __name__ == '__main__':
 
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = 'cpu'
-    
+
     # Seeding
     rng = np.random.RandomState(47)
     torch_rng = torch.Generator().manual_seed(47)
@@ -366,7 +352,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
     torch.manual_seed(47)
     np.random.seed(47)
-    
+
     ppo = PPO(8, 4, 64).to(device)
 
     env = gym.make("LunarLander-v2", continuous=False,
