@@ -1,2 +1,2 @@
-overwrite: False
+overwrite: True
 model: "./weights/lunarlander_ppo"

@@ -1,6 +1,8 @@
 import os
 import yaml
+import torch
 import argparse
+import numpy as np
 
 import gymnasium as gym
 
@@ -31,9 +33,9 @@ def _load_configs(path):
     return configs
 
 
-def _train(env_vec, configs):
-    model = PPO("MlpPolicy", env_vec, verbose=1)
-    model.learn(total_timesteps=100e3)
+def _train(env, configs):
+    model = PPO("MlpPolicy", env, verbose=1)
+    model.learn(total_timesteps=500e3)
     model.save(configs['model'])
 
 
@@ -44,7 +46,10 @@ def _load_model(configs):
 
 
 def _make_env(render='rgb_array'):
-    return gym.make("LunarLander-v2", continuous=False, render_mode=render)
+    env = gym.make("LunarLander-v2", continuous=False, render_mode=render)
+    env.reset(seed=47)
+
+    return env
 
 
 if __name__ == "__main__":
@@ -53,6 +58,15 @@ if __name__ == "__main__":
 
     print(f"Config loaded: {configs}")
 
+    np.random.seed(47)
+    torch.manual_seed(47)
+    torch.cuda.manual_seed_all(47)
+
+    # Make PyTorch deterministic
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # env = _make_env()
     env_vec = DummyVecEnv([_make_env for _ in range(1)])
     
     do_train = not os.path.exists(configs['model'] + ".zip") or configs['overwrite']

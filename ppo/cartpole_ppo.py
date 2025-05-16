@@ -1,9 +1,8 @@
 import os
 import yaml
+import torch
 import argparse
-
-# TODO: remove
-import gymnasium as gym
+import numpy as np
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
@@ -49,9 +48,18 @@ if __name__ == "__main__":
 
     print(f"Config loaded: {configs}")
 
+    np.random.seed(47)
+    torch.manual_seed(47)
+    torch.cuda.manual_seed_all(47)
+
+    # Make PyTorch deterministic
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     env_vec = make_vec_env("CartPole-v1", n_envs=1, seed=47)
     
-    do_train = not os.path.exists(configs['model'] + ".zip") or configs['overwrite']
+    do_train = not os.path.exists(configs['model'] + ".zip") or \
+        configs['overwrite']
 
     if do_train:
         _train(env_vec, configs)
