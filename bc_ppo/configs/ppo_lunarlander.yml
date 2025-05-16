@@ -1,5 +1,5 @@
-save_path: "./weights/ppo_cartpole.pth"
-epochs: 200
-batch_size: 512
-epochs_inner: 4
+save_path: "./weights/ppo_lunarlander.pth"
+train_steps: 100000
+batch_size: 64
+epochs_inner: 10
 buffer_size: 2048
