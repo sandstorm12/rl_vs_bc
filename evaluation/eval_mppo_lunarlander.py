@@ -52,7 +52,7 @@ if __name__ == "__main__":
     device = 'cpu'
 
     env = gym.make("LunarLander-v2", continuous=False,
-                   render_mode="rgb_array")
+                   render_mode="human")
     
     model = _load_model(configs)
     torch.manual_seed(47)
@@ -78,7 +78,7 @@ if __name__ == "__main__":
         obs_tensor = torch.tensor(obs, dtype=torch.float32).to(device)
         action, log_prob = model.act(obs_tensor)
         obs, rewards, dones, truncated, info = env.step(action.item())
-        # env_vec.render("human")
+        # env.render()
 
         rewards_all.append(rewards)
 
