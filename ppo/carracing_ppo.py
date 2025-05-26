@@ -33,7 +33,7 @@ def _load_configs(path):
 
 def _train(env_vec, configs):
     model = PPO("CnnPolicy", env_vec, verbose=1)
-    model.learn(total_timesteps=1000e3)
+    model.learn(total_timesteps=100e3)
     model.save(configs['model'])
 
 
@@ -53,25 +53,25 @@ if __name__ == "__main__":
 
     print(f"Config loaded: {configs}")
 
-    env_vec = DummyVecEnv([_make_env for _ in range(4)])
+    env_vec = DummyVecEnv([_make_env for _ in range(1)])
     
     do_train = not os.path.exists(configs['model'] + ".zip") or configs['overwrite']
 
     if do_train:
         _train(env_vec, configs)
     
-    model = _load_model(configs)
+    # model = _load_model(configs)
 
-    env = _make_env("human")
-    obs, _ = env.reset()
-    steps = 0
-    while True:
-        action, _states = model.predict(obs)
-        obs, rewards, dones, truncated, info = env.step(action)
-        env.render()
-        steps += 1
+    # env = _make_env("human")
+    # obs, _ = env.reset()
+    # steps = 0
+    # while True:
+    #     action, _states = model.predict(obs)
+    #     obs, rewards, dones, truncated, info = env.step(action)
+    #     env.render()
+    #     steps += 1
 
-        if steps > 1000 or dones and truncated:
-            obs, _ = env.reset()
-            steps = 0
+    #     if steps > 1000 or dones and truncated:
+    #         obs, _ = env.reset()
+    #         steps = 0
 

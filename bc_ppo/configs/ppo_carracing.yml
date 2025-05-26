@@ -1,0 +1,5 @@
+save_path: "./weights/ppo_carracing.pth"
+train_steps: 10000
+batch_size: 64
+epochs_inner: 10
+buffer_size: 2048
