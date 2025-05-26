@@ -1,0 +1,2 @@
+num_episodes: 100
+model: "/home/hamid/Documents/indie_projects/rl_vs_bc/bc_ppo/weights/ppo_cartpole.pth"

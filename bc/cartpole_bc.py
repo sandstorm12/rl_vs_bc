@@ -13,15 +13,15 @@ class MLP_BC(torch.nn.Module):
         super(MLP_BC, self).__init__()
         self.layer1 = torch.nn.Linear(input_dim, hidden_dim)
         self.layer2 = torch.nn.Linear(hidden_dim, hidden_dim)
-        self.layer22 = torch.nn.Linear(hidden_dim, hidden_dim)
-        self.layer3 = torch.nn.Linear(hidden_dim, output_dim)
+        self.layer3 = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.layer4 = torch.nn.Linear(hidden_dim, output_dim)
         self.relu = torch.nn.ReLU()
 
     def forward(self, x):
         x = F.relu(self.layer1(x))
         x = F.relu(self.layer2(x))
-        x = F.relu(self.layer22(x))
-        x = self.layer3(x)
+        x = F.relu(self.layer3(x))
+        x = self.layer4(x)
         
         return x
     

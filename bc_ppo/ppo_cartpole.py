@@ -87,7 +87,7 @@ class PPOBuffer:
         rewards = torch.tensor(self.rewards, dtype=torch.float32, device=device)
         values = torch.tensor(self.values, dtype=torch.float32, device=device)
         dones = torch.tensor(self.dones, dtype=torch.float32, device=device)
-        
+    
         next_values = torch.cat([values[1:], torch.zeros(1, device=device)])
         
         deltas = rewards + gamma * next_values * (1 - dones) - values
@@ -99,10 +99,12 @@ class PPOBuffer:
                 last_gae = 0
             last_gae = deltas[t] + gamma * lam * (1 - dones[t]) * last_gae
             advantages[t] = last_gae
+
+        # values = (values - values.mean()) / (values.std() + 1e-8)
         
         returns = advantages + values
-        
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        # advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         self.advantages = advantages
         self.returns = returns
@@ -167,7 +169,7 @@ def fill_buffer(buffer, ppo, env, device, configs):
         obs = (obs - mean) / (std + 1e-8)
         obs_tensor = torch.tensor(obs, dtype=torch.float32).to(device)
         action, log_prob = ppo.act(obs_tensor)
-        obs_new, reward, done, truncated, info = env.step(action.item())
+        obs_new, reward, done, truncated, _ = env.step(action.item())
         _, _, value = ppo.evaluate(obs_tensor, action)
         buffer.store(obs_tensor, action, reward,
                      log_prob.detach(), value.item(),
@@ -175,6 +177,8 @@ def fill_buffer(buffer, ppo, env, device, configs):
         obs = obs_new
         if done or truncated:
             obs, _ = env.reset()
+
+    return configs['buffer_size']
 
 
 def update(buffer, ppo, optimizer, progress, device, configs):
@@ -184,7 +188,7 @@ def update(buffer, ppo, optimizer, progress, device, configs):
     num_epochs = configs['epochs_inner']
     
     clip_param = 0.2
-    entropy_weight = (1 - progress) * 0.01
+    entropy_weight = (1 - progress) * 0
     total_loss = 0
     total_surrogate_loss = 0
     total_value_loss = 0
@@ -202,7 +206,7 @@ def update(buffer, ppo, optimizer, progress, device, configs):
             new_log_probs, entropies, values = \
                 zip(*[ppo.evaluate(s, a) for s, a in zip(states, actions)])
             new_log_probs = torch.stack(new_log_probs)
-            # entropies = torch.stack(entropies)
+            entropies = torch.stack(entropies)
             values = torch.stack(values).squeeze()
             
             ratios = torch.exp(new_log_probs - old_log_probs)
@@ -213,10 +217,12 @@ def update(buffer, ppo, optimizer, progress, device, configs):
             
             value_loss = F.mse_loss(values, returns)
             
-            # # Compute entropy loss
-            # entropy_loss = entropies.mean()
+            # Compute entropy loss
+            entropy_loss = entropies.mean()
             
-            loss = surrogate_loss + 0.5 * value_loss
+            loss = surrogate_loss + \
+                0.5 * value_loss + \
+                entropy_weight * entropy_loss
             
             optimizer.zero_grad()
             loss.backward()
@@ -226,13 +232,13 @@ def update(buffer, ppo, optimizer, progress, device, configs):
             total_loss += loss.item()
             total_surrogate_loss += surrogate_loss.item()
             total_value_loss += value_loss.item()
-            # total_entropy_loss += entropy_loss.item()
+            total_entropy_loss += entropy_loss.item()
 
     total_updates = num_epochs * n_batches
     avg_loss = total_loss / total_updates
     avg_surrogate_loss = total_surrogate_loss / total_updates
     avg_value_loss = total_value_loss / total_updates
-    # avg_entropy_loss = total_entropy_loss / total_updates
+    avg_entropy_loss = total_entropy_loss / total_updates
     
     rewards_total = 0.0
     num_episodes = 0
@@ -246,25 +252,35 @@ def update(buffer, ppo, optimizer, progress, device, configs):
     
     avg_reward = rewards_total / max(1, num_episodes)
     
-    return avg_loss, avg_reward
+    return avg_loss, avg_reward, avg_surrogate_loss, \
+        avg_value_loss, avg_entropy_loss
 
 
 def train(ppo, env, device, configs):
     buffer = PPOBuffer()
     optimizer = torch.optim.Adam(ppo.parameters(), lr=3e-4)
     
-    EPOCHS = configs['epochs']
-    bar = tqdm(range(EPOCHS))
-    for epoch in bar:
-        progress = epoch / EPOCHS
+    total_timesteps = configs['train_steps']
+    timesteps = 0
+    bar = tqdm(range(total_timesteps))
+    while timesteps < total_timesteps:
+        progress = timesteps / total_timesteps
         
-        fill_buffer(buffer, ppo, env, device, configs)
-        loss, rewards_total = update(buffer, ppo, optimizer, progress, device, configs)
+        steps = fill_buffer(buffer, ppo, env, device, configs)
+        timesteps += steps
+        avg_loss, avg_reward, avg_surrogate_loss, \
+            avg_value_loss, avg_entropy_loss = \
+            update(buffer, ppo, optimizer, progress, device, configs)
         
-        bar.set_description('Loss %.3f Rewards: %.1f' % (loss, rewards_total))
+        bar.update(steps)
+        bar.set_description(
+            'AL %.3f AR: %.1f ASL %.3f AVL %.3f AEL %.3f' % \
+            (avg_loss, avg_reward, avg_surrogate_loss,
+             avg_value_loss, avg_entropy_loss))
+        bar.refresh()
         buffer.clear()
         
-        torch.save(ppo.state_dict(), configs['save_path'])
+    torch.save(ppo.state_dict(), configs['save_path'])
 
 
 if __name__ == '__main__':
@@ -273,9 +289,15 @@ if __name__ == '__main__':
 
     print(f"Config loaded: {configs}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = 'cpu'
     
+    # Seeding
+    torch.manual_seed(47)
+    np.random.seed(47)
     ppo = PPO(4, 2, 64).to(device)
+    
     env = gym.make("CartPole-v1")
+    env.reset(seed=47)
     
     train(ppo, env, device, configs)
