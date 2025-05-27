@@ -8,7 +8,7 @@ import numpy as np
 import gymnasium as gym
 
 from tqdm import tqdm
-from bc.cartpole_bc import MLP_BC
+from bc.lunarlander_bc import MLP_BC
 from stable_baselines3.common.env_util import make_vec_env
 
 
@@ -41,7 +41,7 @@ def _load_env():
 
 
 def _load_model(model_path):
-    model = MLP_BC(8, 4)
+    model = MLP_BC(8, 4, 512)
     model.load_state_dict(torch.load(model_path))
     model.eval()
 
@@ -49,7 +49,11 @@ def _load_model(model_path):
 
 
 def _demo(configs):
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = 'cpu'
+
     model = _load_model(configs['model'])
+    model.to(device)
     torch.manual_seed(42)
 
     env = _load_env()
@@ -65,7 +69,7 @@ def _demo(configs):
     obs = env.reset()
     while True:
         obs = (obs - mean) / std
-        obs = torch.tensor(obs, dtype=torch.float32)
+        obs = torch.from_numpy(obs).float().to(device)
 
         action = model(obs)
 
