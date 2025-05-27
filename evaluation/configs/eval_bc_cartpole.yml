@@ -1,4 +1,4 @@
-num_episodes: 100
+num_episodes: 1000
 model: "/home/hamid/Documents/indie_projects/rl_vs_bc/bc/weights/cartpole_bc"
 mean:
   - -6.3883489e-01

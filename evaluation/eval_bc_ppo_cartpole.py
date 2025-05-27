@@ -124,7 +124,8 @@ def run_cartpole(weights_path, num_episodes=5, hidden_dim=64):
         
         obs = next_state
         
-        env.render("human")
+        if configs['visualize']:
+            env.render("human")
 
         rewards_all.append(rewards)
 

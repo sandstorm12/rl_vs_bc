@@ -1,7 +1,17 @@
 model: "/home/hamid/Documents/indie_projects/rl_vs_bc/bc/weights/cartpole_bc"
 save_path: "./weights/ppo_bc_cartpole.pth"
-epochs: 30
-epochs_value: 10
+train_steps: 25000
+train_steps_value: 10000
 batch_size: 64
-epochs_inner: 4
+epochs_inner: 10
 buffer_size: 2048
+mean:
+  - -6.3883489e-01
+  - -1.9440360e-02
+  - -1.2499564e-04
+  - 1.2973925e-03
+std:
+  - 0.5521336
+  - 0.4348506
+  - 0.05661277
+  - 0.30561897

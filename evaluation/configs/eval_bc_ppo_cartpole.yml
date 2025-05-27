@@ -1,4 +1,5 @@
-num_episodes: 100
+num_episodes: 1000
+visualize: False
 model: "/home/hamid/Documents/indie_projects/rl_vs_bc/bc_ppo/weights/ppo_bc_cartpole.pth"
 mean:
   - -6.3883489e-01
